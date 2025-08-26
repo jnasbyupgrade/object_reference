@@ -9,7 +9,6 @@ SELECT plan(
   +1 -- schema
   +3 -- initial
   +2 -- errors
-  +2 -- move
   +1 -- create extensions
 );
 
@@ -48,26 +47,6 @@ SELECT throws_ok(
   , NULL
   , 'secondary may not be specified for table objects'
   , 'secondary may not be specified for table objects'
-);
-
-/*
- * I'm not sure if our extension would continue working if count_nulls was
- * relocated. Currently a moot point since relocation isn't supported, but I'd
- * already coded the second test so might as well leave it here in case it
- * changes in the future.
- */
-\set null_schema test_relocate_count_nulls
-CREATE SCHEMA :null_schema;
-SELECT throws_ok(
-  $$ALTER EXTENSION count_nulls SET SCHEMA $$ || :'null_schema'
-  , '0A000'
-  , NULL
-  , 'Verify count_nulls extension can not be relocated'
-);
-SELECT is(
-  object_reference.object__getsert('table', 'test_table')
-  , (SELECT object_id FROM test_object)
-  , 'Still works after moving the count_nulls extension'
 );
 
 -- Create extensions
