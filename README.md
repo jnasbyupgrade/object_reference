@@ -96,6 +96,14 @@ object__getsert_w_group_id(
 
 Same as `object__getsert()` but accepts a numeric `object_group_id` instead of group name.
 
+### `object__describe(object_id int) RETURNS text`
+
+Returns a human-readable description of the object, matching the format of PostgreSQL's `pg_describe_object()` function.
+
+### `object__identity(object_id int) RETURNS record`
+
+Returns object identification information matching the format of PostgreSQL's `pg_identify_object()` function. Returns a record with columns: `type`, `schema`, `name`, `identity`.
+
 
 ## Object Group Functions
 

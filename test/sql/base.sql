@@ -8,6 +8,7 @@ SELECT plan(
   0
   +1 -- schema
   +3 -- initial
+  +2 -- new functions
   +2 -- errors
   +1 -- create extensions
 );
@@ -34,6 +35,20 @@ SELECT is(
   (SELECT object_oid FROM _object_reference._object_v WHERE object_id = (SELECT object_id FROM test_object))
   , 'test_table'::regclass::oid
   , 'Verify object_oid field is correct'
+);
+
+-- Test object__describe function
+SELECT is(
+  object_reference.object__describe((SELECT object_id FROM test_object))
+  , pg_catalog.pg_describe_object('pg_class'::regclass, 'test_table'::regclass, 0)
+  , 'object__describe returns same result as pg_describe_object'
+);
+
+-- Test object__identity function  
+SELECT results_eq(
+  $$SELECT * FROM object_reference.object__identity((SELECT object_id FROM test_object))$$
+  , $$SELECT type, schema, name, identity FROM pg_catalog.pg_identify_object('pg_class'::regclass, 'test_table'::regclass, 0)$$
+  , 'object__identity returns same result as pg_identify_object'
 );
 SELECT is(
   object_reference.object__getsert('table', 'test_table')

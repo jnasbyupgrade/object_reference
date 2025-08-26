@@ -731,7 +731,51 @@ $body$
   , 'Add a foreign key from <table_name>.<field_name> to the object table.'
   , 'object_reference__dependency'
 );
+/*
+ * OBJECT INFO FUNCTIONS
+ */
+SELECT __object_reference.create_function(
+  'object_reference.object__describe'
+  , $args$
+  object_id int
+$args$
+  , 'text LANGUAGE sql'
+  , $body$
+SELECT pg_catalog.pg_describe_object(
+  o.classid,
+  o.objid, 
+  o.objsubid
+)
+FROM _object_reference._object_oid o
+WHERE o.object_id = $1
+$body$
+  , 'Return a human-readable description of the object, matching pg_describe_object() format.'
+  , 'object_reference__usage'
+);
 
+SELECT __object_reference.create_function(
+  'object_reference.object__identity'
+  , $args$
+  object_id int
+  , OUT type text
+  , OUT schema text
+  , OUT name text
+  , OUT identity text
+$args$
+  , 'record LANGUAGE sql'
+  , $body$
+SELECT 
+  i.type::text,
+  i.schema::text,
+  i.name::text,
+  i.identity::text
+FROM _object_reference._object_oid o,
+     LATERAL pg_catalog.pg_identify_object(o.classid, o.objid, o.objsubid) i
+WHERE o.object_id = $1
+$body$
+  , 'Return object identification information matching pg_identify_object() format.'
+  , 'object_reference__usage'
+);
 /*
  * OBJECT GETSERT
  */
