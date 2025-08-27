@@ -52,5 +52,7 @@ psql:test/temp_load.not_sql:528: WARNING:  I promise you will be sorry if you tr
 
 
 
+
+
 Loaded OK!
 # TRANSACTION INTENTIONALLY LEFT OPEN!
