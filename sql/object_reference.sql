@@ -528,6 +528,23 @@ CREATE TABLE _object_reference.object_group__object(
 );
 SELECT __object_reference.safe_dump('_object_reference.object_group__object');
 
+-- Trigger function for automatic object cleanup
+SELECT __object_reference.create_function(
+  '_object_reference._object_group__object__cleanup_trigger'
+  , ''
+  , 'trigger LANGUAGE plpgsql'
+  , $body$
+BEGIN
+  PERFORM object_reference.object__cleanup(OLD.object_id);
+  RETURN OLD;
+END
+$body$
+  , 'Trigger function to automatically attempt cleanup of objects when removed from groups.'
+);
+CREATE TRIGGER object_group__object__cleanup
+  AFTER DELETE ON _object_reference.object_group__object
+  FOR EACH ROW
+  EXECUTE FUNCTION _object_reference._object_group__object__cleanup_trigger();
 -- __get
 SELECT __object_reference.create_function(
   'object_reference.object_group__get'
@@ -774,6 +791,23 @@ FROM _object_reference._object_oid o,
 WHERE o.object_id = $1
 $body$
   , 'Return object identification information matching pg_identify_object() format.'
+  , 'object_reference__usage'
+);
+SELECT __object_reference.create_function(
+  'object_reference.object__cleanup'
+  , $args$
+  object_id int
+$args$
+  , 'void LANGUAGE plpgsql'
+  , $body$
+BEGIN
+  DELETE FROM _object_reference.object WHERE object.object_id = object__cleanup.object_id;
+EXCEPTION WHEN foreign_key_violation THEN
+  -- Object is still referenced elsewhere, ignore the error
+  NULL;
+END
+$body$
+  , 'Attempts to delete an object from the tracking system. Silently returns if the object is still referenced by other tables.'
   , 'object_reference__usage'
 );
 /*

@@ -40,6 +40,8 @@ SELECT plan(
   +4      -- __object__remove
 
   +4 + 2  -- __remove
+  +4      -- cleanup tests
+  +1      -- final group removal (there was always an extra test)
 );
 
 SELECT lives_ok(
@@ -211,6 +213,26 @@ SELECT lives_ok(
   )
   , '__object__remove() for test_table_2 works'
 );
+
+-- Test automatic cleanup via trigger
+SELECT lives_ok(
+  $$CREATE TEMP TABLE cleanup_test_id AS SELECT * FROM object_reference.object__getsert('table', 'object_group_test_table_1', object_group_name := 'object reference test group')$$
+  , 'Add test table back to group for cleanup test'
+);
+SELECT ok(
+  EXISTS(SELECT 1 FROM _object_reference.object WHERE object_id = (SELECT object__getsert FROM cleanup_test_id))
+  , 'Object exists before cleanup test'
+);
+SELECT lives_ok(
+  $$DELETE FROM _object_reference.object_group__object WHERE object_id = (SELECT object__getsert FROM cleanup_test_id)$$
+  , 'Remove from group triggers automatic cleanup attempt'
+);
+-- Object should be deleted because it's no longer in any group and trigger calls cleanup
+SELECT ok(
+  NOT EXISTS(SELECT 1 FROM _object_reference.object WHERE object_id = (SELECT object__getsert FROM cleanup_test_id))
+  , 'Object was automatically cleaned up after group removal'
+);
+
 SELECT lives_ok(
   $$SELECT object_reference.object_group__remove('object reference test group')$$
   , 'Removing empty group works'

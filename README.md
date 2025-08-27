@@ -35,7 +35,7 @@ GRANT object_reference__usage TO role1, role2, role3;
 There are two roles associated with the extension:
 
 - `object_reference__usage` - Allows using the extension's public API functions. Grant this to users who need to track and manage object references.
-- `object_reference__dependency` - Special role for creating foreign key dependencies to the internal object table. Only grant this to schemas/applications that need to create referential integrity constraints against the object tracking system.
+- `object_reference__dependency` - Special role for creating foreign key dependencies to the internal object table. Only grant this to schemas/applications that need to create referential integrity constraints against the object tracking system. See [Referring to Objects](#referring-to-objects) below.
 
 Most users will only need `object_reference__usage`. The `object_reference__dependency` role is only needed when using `object__dependency__add()` or `object_group__dependency__add()` functions.
 
@@ -52,6 +52,10 @@ Objects can be organized into named groups for logical organization. This is par
 ## DDL Capture
 
 The framework can automatically capture newly created objects during DDL operations and add them to a specified object group. This is implemented using PostgreSQL event triggers.
+
+## Referring to Objects
+
+The framework supports removing objects that are no longer referenced. Because of this, *it is critical that any tables that store an `object_id` are registered with `object__dependency__add()`*.
 
 # API
 
@@ -246,6 +250,14 @@ post_restore() RETURNS void
 ```
 
 Ensures all object references are correct after a database restore. Run this after restoring from backup to fix any OID mismatches.
+
+### `object__cleanup(object_id int) RETURNS void`
+
+```sql
+object__cleanup(object_id int) RETURNS void
+```
+
+Attempts to delete an object from the tracking system. Silently returns if the object is still referenced by other tables (via foreign keys). This function is automatically called when objects are removed from object groups.
 
 ### Object Type Information Functions
 
