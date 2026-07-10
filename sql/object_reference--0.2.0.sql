@@ -1,5 +1,37 @@
 /* DO NOT EDIT - AUTO-GENERATED FILE */
-SET LOCAL client_min_messages = WARNING;
+/*
+ * Quiet the NOTICEs this install script emits (e.g. duplicate CREATE ROLE)
+ * without overriding a caller who has deliberately asked for even less output.
+ *
+ * CREATE EXTENSION runs the whole script in one transaction, so a blind
+ * `SET LOCAL client_min_messages = WARNING` clobbers the caller's setting for
+ * the entire statement -- including any CASCADE that pulls this extension in
+ * as a dependency (see issue #4). A caller who set a stricter level such as
+ * ERROR to keep install output quiet would be silently overridden.
+ *
+ * Instead only raise the floor to WARNING; never lower it below the level the
+ * caller chose. SET LOCAL inside a DO block still applies to the rest of the
+ * (CREATE EXTENSION) transaction, and reverts at commit so it does not leak
+ * into the caller's session.
+ */
+DO $$
+DECLARE
+  -- client_min_messages levels ordered least-to-most severe (LOG sorts
+  -- between DEBUG1 and NOTICE for this GUC).
+  c_levels CONSTANT text[] := ARRAY[
+    'debug5', 'debug4', 'debug3', 'debug2', 'debug1'
+    , 'log', 'notice', 'warning', 'error'
+  ];
+BEGIN
+  IF pg_catalog.array_position(
+       c_levels
+       , pg_catalog.lower(pg_catalog.current_setting('client_min_messages'))
+     ) < pg_catalog.array_position(c_levels, 'warning')
+  THEN
+    SET LOCAL client_min_messages = warning;
+  END IF;
+END
+$$;
 \echo This extension must be loaded via 'CREATE EXTENSION object_reference;'
 \echo You really, REALLY do NOT want to try and load this via psql!!!
 \echo It will FAIL during pg_dump! \quit
