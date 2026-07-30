@@ -1,4 +1,5 @@
 \set ECHO none
+NOTICE:  extension "cat_tools" already exists, skipping
 This extension must be loaded via CREATE EXTENSION object_reference;
 You really, REALLY do NOT want to try and load this via psql!!!
 

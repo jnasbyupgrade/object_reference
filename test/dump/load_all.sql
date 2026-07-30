@@ -3,6 +3,14 @@
 \i test/load.sql
 
 /*
+ * This runs against test_dump, a plain createdb'd database (see
+ * test/dump/run.sh) -- entirely outside pg_regress and its test/install
+ * schedule, so the extension isn't already installed here the way it is for
+ * the main suite. Install it explicitly.
+ */
+CREATE EXTENSION object_reference CASCADE;
+
+/*
  * SEE ALSO sql/all.sql!
  */
 

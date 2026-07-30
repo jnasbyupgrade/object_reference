@@ -36,6 +36,13 @@ test/build/sql/
 # Created by make when test/install/*.sql files exist.
 test/install/schedule
 
+# pg_regress writes these here because the "../install/load" schedule entry
+# resolves to the same path for both --inputdir/expected and
+# --outputdir/results (see the comment at the top of test/install/load.sql)
+# -- transient run artifacts, not committed expected output.
+test/install/load.out
+test/install/load.diff
+
 # Misc
 tmp/
 .DS_Store
