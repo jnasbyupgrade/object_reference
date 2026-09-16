@@ -109,7 +109,7 @@ $body$;
  * __object_reference.exec() above, used by object__dependency__add() /
  * object_group__dependency__add() (unchanged since 0.1.0, but 0.1.0 never
  * created this permanent helper -- an existing gap this update closes) and
- * by internal_update__begin()/__end() below.
+ * by event_trigger__disable()/__enable() below.
  */
 SELECT __object_reference.create_function(
   '_object_reference.exec'
@@ -146,28 +146,45 @@ SELECT EXISTS(
       AND d.refclassid = 'pg_catalog.pg_extension'::regclass
       AND d.refobjid = (SELECT oid FROM pg_catalog.pg_extension WHERE extname = 'object_reference')
 )
+/*
+ * The extension's own declared schema (object_reference) is a special
+ * case: CREATE EXTENSION records the EXTENSION as depending on it (a plain
+ * DEPENDENCY_NORMAL row, extension -> schema), not the schema as an 'e'
+ * member of the extension the way every other object it creates is -- so
+ * it never matches the pg_depend check above.
+ */
+OR (
+  _is_own_object.classid = 'pg_catalog.pg_namespace'::regclass
+  AND _is_own_object.objid = (SELECT extnamespace FROM pg_catalog.pg_extension WHERE extname = 'object_reference')
+)
 $body$
   , 'Is the object a member of the object_reference extension itself? (pg_depend deptype = e membership, not just co-installation.)'
 );
 
 /*
- * New: internal update-time disable/enable mechanism, replacing the
- * session_replication_role trick 0.1.0 had no equivalent of. 0.1.0 already
- * installed this extension's own event triggers, and they stay active for
- * the rest of THIS session while the structural changes below run.
- * zzz__object_reference_drop in particular queries _object_reference._object_v
- * inside its own body, so it would fire -- and error, since the view is
- * momentarily gone -- the instant this script drops that view a few
- * statements down. The other two event triggers self-recognize and skip our
- * own script's DDL instead (see _etg_fix_identity/_etg_capture below), so
- * only zzz__object_reference_drop needs to be disabled here.
+ * New: general-purpose event-trigger disable/enable mechanism, replacing
+ * the session_replication_role trick 0.1.0 had no equivalent of. 0.1.0
+ * already installed this extension's own event triggers, and they stay
+ * active for the rest of THIS session while the structural changes below
+ * run. zzz__object_reference_drop in particular queries
+ * _object_reference._object_v inside its own body, so it would fire --
+ * and error, since the view is momentarily gone -- the instant this
+ * script drops that view a few statements down. The other two event
+ * triggers self-recognize and skip our own script's DDL instead (see
+ * _etg_fix_identity/_etg_capture below), so only zzz__object_reference_drop
+ * needs to be disabled here.
  *
  * These are created now, ahead of the structural section, specifically so
- * this script itself can call internal_update__begin() below -- a fresh
- * install only ever needs these for FUTURE update scripts.
+ * this script itself can call event_trigger__disable() below -- a fresh
+ * install only ever needs these for FUTURE update scripts, or anywhere
+ * else a future need to safely quiet an event trigger comes up (hence the
+ * mechanism-focused name, not one tied to "being mid-update"). Unlike
+ * session_replication_role, disabling this way is visible database-wide
+ * the instant it runs, not just to this script's own session -- run
+ * updates without concurrent DDL on tracked objects for this reason.
  */
 SELECT __object_reference.create_function(
-  '_object_reference.internal_update__begin'
+  '_object_reference.event_trigger__disable'
   , $args$
   event_trigger_names name[] DEFAULT '{zzz__object_reference_drop}'
 $args$
@@ -177,18 +194,23 @@ DECLARE
   v_name name;
 BEGIN
   BEGIN
-    CREATE TEMP TABLE __object_reference__internal_update(
-      evtname     name    PRIMARY KEY
-      , evtenabled  "char"  NOT NULL
-    );
+    /*
+     * Mirrors pg_event_trigger's own evtname/evtenabled columns (via CTAS,
+     * so the connection to that catalog is visible in the code, not just a
+     * hand-typed column list that happens to reuse its names) -- this is
+     * exactly the row this extension needs to restore later.
+     */
+    CREATE TEMP TABLE __object_reference__event_trigger_state AS
+      SELECT evtname, evtenabled FROM pg_catalog.pg_event_trigger WHERE false;
+    ALTER TABLE pg_temp.__object_reference__event_trigger_state ADD PRIMARY KEY (evtname);
   EXCEPTION WHEN duplicate_table THEN
-    RAISE 'internal_update__begin() called while already in an internal update'
-      USING HINT = 'A previous internal_update__end() call may have been skipped.'
+    RAISE 'event_trigger__disable() called while a previous call is still in effect'
+      USING HINT = 'A previous event_trigger__enable() call may have been skipped.'
     ;
   END;
 
   FOREACH v_name IN ARRAY event_trigger_names LOOP
-    INSERT INTO pg_temp.__object_reference__internal_update(evtname, evtenabled)
+    INSERT INTO pg_temp.__object_reference__event_trigger_state(evtname, evtenabled)
       SELECT evtname, evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname = v_name;
 
     IF NOT FOUND THEN
@@ -199,17 +221,17 @@ BEGIN
   END LOOP;
 END
 $body$
-  , 'Disable the given (or default) event triggers for the duration of this extension''s own internal update; pair with internal_update__end().'
+  , 'Disable the given (or default) event triggers, remembering their exact prior state; pair with event_trigger__enable().'
 );
 SELECT __object_reference.create_function(
-  '_object_reference.internal_update__end'
+  '_object_reference.event_trigger__enable'
   , ''
   , 'void LANGUAGE plpgsql'
   , $body$
 DECLARE
   r record;
 BEGIN
-  FOR r IN SELECT evtname, evtenabled FROM pg_temp.__object_reference__internal_update LOOP
+  FOR r IN SELECT evtname, evtenabled FROM pg_temp.__object_reference__event_trigger_state LOOP
     PERFORM _object_reference.exec(format(
       'ALTER EVENT TRIGGER %I %s'
       , r.evtname
@@ -222,15 +244,15 @@ BEGIN
     ));
   END LOOP;
 
-  DROP TABLE pg_temp.__object_reference__internal_update;
+  DROP TABLE pg_temp.__object_reference__event_trigger_state;
 EXCEPTION WHEN undefined_table THEN
-  RAISE 'internal_update__end() called without a matching internal_update__begin()';
+  RAISE 'event_trigger__enable() called without a matching event_trigger__disable()';
 END
 $body$
-  , 'Restore event triggers disabled by internal_update__begin() to their prior enabled state.'
+  , 'Restore event triggers disabled by event_trigger__disable() to their exact prior state.'
 );
 
-SELECT _object_reference.internal_update__begin();
+SELECT _object_reference.event_trigger__disable();
 
 /*
  * _object_reference.object: no column changes, just a missing
@@ -527,10 +549,20 @@ $body$
 /*
  * _etg_fix_identity/_etg_capture: gain a self-recognition guard so they skip
  * DDL issued by any extension's own install/update script (ours included)
- * instead of reacting to it -- see internal_update__begin()/__end() above
- * for why zzz__object_reference_drop needs a different mechanism. Same
- * signatures as 0.1.0, so a plain CREATE OR REPLACE (via create_function) is
- * enough -- no DROP needed.
+ * instead of reacting to it. Without it, _etg_capture would try to call
+ * _object_reference._object_v__for_update() (the FUNCTION) to register any
+ * CREATE-tagged command in this very script -- including a moment where
+ * that function has been dropped and not yet recreated (see the structural
+ * section below), which would fail outright if a capture happened to be
+ * active during an extension update; _etg_fix_identity would otherwise run
+ * its blanket identity-recompute pass on every one of this script's many
+ * DDL statements for no reason, since nothing it touches is (or, after this
+ * update's self-tracking guard, ever legitimately can be) one of this
+ * extension's own tracked rows. zzz__object_reference_drop can't
+ * self-recognize the same way; see event_trigger__disable()/__enable()
+ * above for why it needs a different mechanism. Same signatures as 0.1.0,
+ * so a plain CREATE OR REPLACE (via create_function) is enough -- no DROP
+ * needed.
  */
 SELECT __object_reference.create_function(
   '_object_reference._etg_fix_identity'
@@ -902,9 +934,9 @@ DROP SCHEMA __object_reference;
 
 /*
  * Re-enable zzz__object_reference_drop (to its actual prior state, saved by
- * internal_update__begin() near the top of this script), now that the
+ * event_trigger__disable() near the top of this script), now that the
  * structural section and its cleanup are both done.
  */
-SELECT _object_reference.internal_update__end();
+SELECT _object_reference.event_trigger__enable();
 
 -- vi: expandtab sw=2 ts=2

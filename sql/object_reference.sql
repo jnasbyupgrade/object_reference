@@ -178,6 +178,17 @@ SELECT EXISTS(
       AND d.refclassid = 'pg_catalog.pg_extension'::regclass
       AND d.refobjid = (SELECT oid FROM pg_catalog.pg_extension WHERE extname = 'object_reference')
 )
+/*
+ * The extension's own declared schema (object_reference) is a special
+ * case: CREATE EXTENSION records the EXTENSION as depending on it (a plain
+ * DEPENDENCY_NORMAL row, extension -> schema), not the schema as an 'e'
+ * member of the extension the way every other object it creates is -- so
+ * it never matches the pg_depend check above.
+ */
+OR (
+  _is_own_object.classid = 'pg_catalog.pg_namespace'::regclass
+  AND _is_own_object.objid = (SELECT extnamespace FROM pg_catalog.pg_extension WHERE extname = 'object_reference')
+)
 $body$
   , 'Is the object a member of the object_reference extension itself? (pg_depend deptype = e membership, not just co-installation.)'
 );
@@ -1561,13 +1572,16 @@ $body$
 );
 
 /*
- * Internal update-time disable/enable mechanism, for use by this extension's
- * OWN install/update scripts only (not part of the public API).
+ * General-purpose event-trigger disable/enable mechanism, for use by this
+ * extension's OWN install/update scripts only (not part of the public API).
+ * Not tied to "being mid-update" specifically -- it's a plain disable-with-
+ * restore primitive for any event trigger that can't self-recognize (via
+ * in_extension, see below) that it should stay quiet.
  *
  * zzz_object_reference__fix_identity and zzz_object_reference_capture can
  * recognize (and skip) DDL issued by any extension's own script via
  * pg_event_trigger_ddl_commands()'s in_extension column, so they never need
- * to be disabled. zzz__object_reference_drop cannot: it fires from
+ * to be disabled this way. zzz__object_reference_drop cannot: it fires from
  * pg_event_trigger_dropped_objects(), which has no equivalent column, and it
  * queries _object_reference._object_v -- a view an update script may itself
  * be dropping and recreating -- so it must be truly disabled for the
@@ -1576,9 +1590,16 @@ $body$
  * ALTER EVENT TRIGGER is ordinary transactional DDL, so if the calling
  * script's transaction rolls back, the DISABLE (and any ENABLE already run)
  * rolls back with it -- no separate cleanup-on-error logic is needed here.
+ *
+ * Unlike the session_replication_role trick this replaces, disabling an
+ * event trigger this way is visible database-wide the instant it runs, not
+ * just to the calling session -- any other session's DDL on a tracked
+ * object during that window also won't fire the disabled trigger. Update
+ * scripts are expected to run without concurrent DDL on tracked objects for
+ * exactly this reason.
  */
 SELECT __object_reference.create_function(
-  '_object_reference.internal_update__begin'
+  '_object_reference.event_trigger__disable'
   , $args$
   event_trigger_names name[] DEFAULT '{zzz__object_reference_drop}'
 $args$
@@ -1588,18 +1609,23 @@ DECLARE
   v_name name;
 BEGIN
   BEGIN
-    CREATE TEMP TABLE __object_reference__internal_update(
-      evtname     name    PRIMARY KEY
-      , evtenabled  "char"  NOT NULL
-    );
+    /*
+     * Mirrors pg_event_trigger's own evtname/evtenabled columns (via CTAS,
+     * so the connection to that catalog is visible in the code, not just a
+     * hand-typed column list that happens to reuse its names) -- this is
+     * exactly the row this extension needs to restore later.
+     */
+    CREATE TEMP TABLE __object_reference__event_trigger_state AS
+      SELECT evtname, evtenabled FROM pg_catalog.pg_event_trigger WHERE false;
+    ALTER TABLE pg_temp.__object_reference__event_trigger_state ADD PRIMARY KEY (evtname);
   EXCEPTION WHEN duplicate_table THEN
-    RAISE 'internal_update__begin() called while already in an internal update'
-      USING HINT = 'A previous internal_update__end() call may have been skipped.'
+    RAISE 'event_trigger__disable() called while a previous call is still in effect'
+      USING HINT = 'A previous event_trigger__enable() call may have been skipped.'
     ;
   END;
 
   FOREACH v_name IN ARRAY event_trigger_names LOOP
-    INSERT INTO pg_temp.__object_reference__internal_update(evtname, evtenabled)
+    INSERT INTO pg_temp.__object_reference__event_trigger_state(evtname, evtenabled)
       SELECT evtname, evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname = v_name;
 
     IF NOT FOUND THEN
@@ -1610,17 +1636,17 @@ BEGIN
   END LOOP;
 END
 $body$
-  , 'Disable the given (or default) event triggers for the duration of this extension''s own internal update; pair with internal_update__end().'
+  , 'Disable the given (or default) event triggers, remembering their exact prior state; pair with event_trigger__enable().'
 );
 SELECT __object_reference.create_function(
-  '_object_reference.internal_update__end'
+  '_object_reference.event_trigger__enable'
   , ''
   , 'void LANGUAGE plpgsql'
   , $body$
 DECLARE
   r record;
 BEGIN
-  FOR r IN SELECT evtname, evtenabled FROM pg_temp.__object_reference__internal_update LOOP
+  FOR r IN SELECT evtname, evtenabled FROM pg_temp.__object_reference__event_trigger_state LOOP
     PERFORM _object_reference.exec(format(
       'ALTER EVENT TRIGGER %I %s'
       , r.evtname
@@ -1633,12 +1659,12 @@ BEGIN
     ));
   END LOOP;
 
-  DROP TABLE pg_temp.__object_reference__internal_update;
+  DROP TABLE pg_temp.__object_reference__event_trigger_state;
 EXCEPTION WHEN undefined_table THEN
-  RAISE 'internal_update__end() called without a matching internal_update__begin()';
+  RAISE 'event_trigger__enable() called without a matching event_trigger__disable()';
 END
 $body$
-  , 'Restore event triggers disabled by internal_update__begin() to their prior enabled state.'
+  , 'Restore event triggers disabled by event_trigger__disable() to their exact prior state.'
 );
 
 SELECT __object_reference.create_function(

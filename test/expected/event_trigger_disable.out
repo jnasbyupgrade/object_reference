@@ -1,13 +1,13 @@
 \set ECHO none
 1..15
-ok 1 - event_trigger__disable() disables the default trigger
-ok 2 - zzz__object_reference_drop is disabled while a call is in effect
-ok 3 - event_trigger__enable() re-enables it
-ok 4 - zzz__object_reference_drop is back to its original (origin) state
-ok 5 - manually disable zzz_object_reference_capture ahead of time
-ok 6 - disable()/enable() round-trip on an already-disabled trigger
-ok 7 - still disabled afterward -- its prior state was preserved, not assumed enabled
-ok 8 - restore zzz_object_reference_capture for later tests
+ok 1 - default event trigger to disable is zzz__object_reference_drop
+ok 2 - manually disable test trigger b ahead of time
+ok 3 - disable() both test triggers
+ok 4 - test trigger a is disabled while a call is in effect
+ok 5 - test trigger b is (still) disabled while a call is in effect
+ok 6 - enable() restores both
+ok 7 - test trigger a is back to its original (origin) state
+ok 8 - test trigger b is still disabled -- its prior state was preserved, not assumed enabled
 ok 9 - disable() the first time
 ok 10 - a second disable() without enable() in between is rejected
 ok 11 - enable() cleans up so later tests are unaffected

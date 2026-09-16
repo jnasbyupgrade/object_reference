@@ -9,7 +9,7 @@ SELECT plan(
   +1 -- schema
   +3 -- initial
   +2 -- new functions
-  +5 -- errors (includes temp object + self-tracking rejection tests)
+  +6 -- errors (includes temp object + self-tracking rejection tests)
   +1 -- create extensions
   +2 -- schema-qualification (search_path)
 );
@@ -86,6 +86,12 @@ SELECT throws_ok(
   , '0A000' -- feature_not_supported
   , 'cannot track an object that is a member of the object_reference extension itself'
   , 'own event trigger function is rejected'
+);
+SELECT throws_ok(
+  $$SELECT object_reference.object__getsert('schema', 'object_reference')$$
+  , '0A000' -- feature_not_supported
+  , 'cannot track an object that is a member of the object_reference extension itself'
+  , 'own declared schema is rejected (extension depends on it, not the other way around)'
 );
 
 -- Create extensions

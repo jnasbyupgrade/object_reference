@@ -2,65 +2,79 @@
 
 \i test/load.sql
 
+/*
+ * event_trigger__disable()/__enable() are ALTER EVENT TRIGGER under the
+ * hood, which is a database-wide change visible to every session the
+ * instant it runs (unlike the session-local session_replication_role trick
+ * it replaces) -- so this test exercises the mechanism against its OWN
+ * dummy event triggers, never the real zzz_* ones other test files in this
+ * same parallel run depend on staying enabled.
+ */
+CREATE FUNCTION event_trigger_disable_test__noop() RETURNS event_trigger LANGUAGE plpgsql AS $$
+BEGIN
+END
+$$;
+CREATE EVENT TRIGGER event_trigger_disable_test__a ON ddl_command_start EXECUTE FUNCTION event_trigger_disable_test__noop();
+CREATE EVENT TRIGGER event_trigger_disable_test__b ON ddl_command_start EXECUTE FUNCTION event_trigger_disable_test__noop();
+
 SELECT plan(
   0
-  +4 -- default disable/enable round-trip disables, then restores, the trigger
-  +4 -- disable/enable preserves a non-default prior state instead of assuming enabled
+  +1 -- default target is zzz__object_reference_drop
+  +7 -- multi-trigger disable/enable preserves each one's own prior state
   +3 -- nested disable() without an intervening enable() is rejected
   +1 -- enable() without a matching disable() is rejected
   +1 -- disable() rejects an unknown event trigger name
   +2 -- schema-qualification (search_path)
 );
 
--- Default disable/enable round-trip
+-- Default target (checked via source, never invoked against a real trigger)
+SELECT matches(
+  pg_catalog.pg_get_functiondef('_object_reference.event_trigger__disable(name[])'::regprocedure)
+  , 'zzz__object_reference_drop'
+  , 'default event trigger to disable is zzz__object_reference_drop'
+);
+
+-- Multi-trigger disable/enable, preserving each trigger's own prior state
 SELECT lives_ok(
-  $$SELECT _object_reference.event_trigger__disable()$$
-  , 'event_trigger__disable() disables the default trigger'
+  $$ALTER EVENT TRIGGER event_trigger_disable_test__b DISABLE$$
+  , 'manually disable test trigger b ahead of time'
+);
+SELECT lives_ok(
+  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a,event_trigger_disable_test__b}')$$
+  , 'disable() both test triggers'
 );
 SELECT is(
-  (SELECT evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname = 'zzz__object_reference_drop')
+  (SELECT evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname = 'event_trigger_disable_test__a')
   , 'D'
-  , 'zzz__object_reference_drop is disabled while a call is in effect'
+  , 'test trigger a is disabled while a call is in effect'
+);
+SELECT is(
+  (SELECT evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname = 'event_trigger_disable_test__b')
+  , 'D'
+  , 'test trigger b is (still) disabled while a call is in effect'
 );
 SELECT lives_ok(
   $$SELECT _object_reference.event_trigger__enable()$$
-  , 'event_trigger__enable() re-enables it'
+  , 'enable() restores both'
 );
 SELECT is(
-  (SELECT evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname = 'zzz__object_reference_drop')
+  (SELECT evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname = 'event_trigger_disable_test__a')
   , 'O'
-  , 'zzz__object_reference_drop is back to its original (origin) state'
-);
-
--- Preserve a non-default prior state (already disabled for unrelated reasons)
-SELECT lives_ok(
-  $$ALTER EVENT TRIGGER zzz_object_reference_capture DISABLE$$
-  , 'manually disable zzz_object_reference_capture ahead of time'
-);
-SELECT lives_ok(
-  $$
-    SELECT _object_reference.event_trigger__disable('{zzz_object_reference_capture}');
-    SELECT _object_reference.event_trigger__enable();
-  $$
-  , 'disable()/enable() round-trip on an already-disabled trigger'
+  , 'test trigger a is back to its original (origin) state'
 );
 SELECT is(
-  (SELECT evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname = 'zzz_object_reference_capture')
+  (SELECT evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname = 'event_trigger_disable_test__b')
   , 'D'
-  , 'still disabled afterward -- its prior state was preserved, not assumed enabled'
-);
-SELECT lives_ok(
-  $$ALTER EVENT TRIGGER zzz_object_reference_capture ENABLE$$
-  , 'restore zzz_object_reference_capture for later tests'
+  , 'test trigger b is still disabled -- its prior state was preserved, not assumed enabled'
 );
 
 -- Nested disable() without an intervening enable()
 SELECT lives_ok(
-  $$SELECT _object_reference.event_trigger__disable()$$
+  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
   , 'disable() the first time'
 );
 SELECT throws_ok(
-  $$SELECT _object_reference.event_trigger__disable()$$
+  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
   , NULL
   , 'event_trigger__disable() called while a previous call is still in effect'
   , 'a second disable() without enable() in between is rejected'
