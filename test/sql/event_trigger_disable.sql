@@ -26,6 +26,7 @@ SELECT plan(
   +3 -- nested disable() without an intervening enable() is rejected
   +1 -- enable() without a matching disable() is rejected
   +1 -- disable() rejects an unknown event trigger name
+  +1 -- disable() rejects a duplicate name in its own argument list
   +5 -- zzz_object_reference_capture self-recognizes and stands down while a disable() is in effect
   +2 -- schema-qualification (search_path)
 );
@@ -94,6 +95,14 @@ SELECT throws_ok(
   , NULL
   , 'event trigger "no_such_event_trigger" does not exist'
   , 'disable() rejects an unknown event trigger name'
+);
+
+-- Duplicate name in the same call
+SELECT throws_ok(
+  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a,event_trigger_disable_test__a}')$$
+  , NULL
+  , 'event_trigger_names contains a duplicate name'
+  , 'disable() rejects a duplicate name in its own argument list'
 );
 
 /*

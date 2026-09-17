@@ -122,26 +122,6 @@ END
 $body$;
 
 /*
- * New: _object_reference.exec(), the permanent counterpart to
- * __object_reference.exec() above, used by object__dependency__add() /
- * object_group__dependency__add() (unchanged since 0.1.0, but 0.1.0 never
- * created this permanent helper -- an existing gap this update closes) and
- * by event_trigger__disable()/__enable() below.
- */
-SELECT __object_reference.create_function(
-  '_object_reference.exec'
-  , 'sql text'
-  , 'void LANGUAGE plpgsql'
-  , $body$
-BEGIN
-  RAISE DEBUG 'sql = %', sql;
-  EXECUTE sql;
-END
-$body$
-  , 'Execute arbitrary SQL with logging.'
-);
-
-/*
  * New: refuse to track objects that are themselves members of the
  * object_reference extension (see the guard added to
  * _object_v__for_update() below).
@@ -411,6 +391,10 @@ BEGIN
       USING HINT = 'A previous event_trigger__enable() call may have been skipped.'
     ;
   END;
+
+  IF array_length(event_trigger_names, 1) <> (SELECT count(DISTINCT x) FROM unnest(event_trigger_names) x) THEN
+    RAISE 'event_trigger_names contains a duplicate name' USING DETAIL = event_trigger_names::text;
+  END IF;
 
   FOREACH v_name IN ARRAY event_trigger_names LOOP
     /*

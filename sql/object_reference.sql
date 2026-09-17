@@ -1673,6 +1673,10 @@ BEGIN
     ;
   END;
 
+  IF array_length(event_trigger_names, 1) <> (SELECT count(DISTINCT x) FROM unnest(event_trigger_names) x) THEN
+    RAISE 'event_trigger_names contains a duplicate name' USING DETAIL = event_trigger_names::text;
+  END IF;
+
   FOREACH v_name IN ARRAY event_trigger_names LOOP
     /*
      * FOR UPDATE locks the row before we read it, so no other session's own
