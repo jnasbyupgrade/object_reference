@@ -8,10 +8,16 @@
  * statements down, and CREATE SCHEMA __object_reference is exactly the
  * kind of CREATE-tagged statement _etg_capture would otherwise try (and
  * fail) to register into any capture group active during this update.
- * Assumed 'O' (origin) on the restore below rather than captured and
- * restored precisely: 0.1.0 always creates both this way, and nothing else
- * in this extension ever changes it before an update runs.
+ * Their actual prior state is captured into a temp table (rather than
+ * assumed 'O') and restored below, so a DBA's own prior DISABLE of either
+ * trigger survives this update instead of being silently overwritten.
  */
+CREATE TEMP TABLE __object_reference__bootstrap_event_trigger_state AS
+  SELECT evtname, evtenabled
+    FROM pg_catalog.pg_event_trigger
+    WHERE evtname IN ('zzz_object_reference_capture', 'zzz_object_reference__fix_identity')
+;
+
 ALTER EVENT TRIGGER zzz_object_reference_capture DISABLE;
 ALTER EVENT TRIGGER zzz_object_reference__fix_identity DISABLE;
 
@@ -250,8 +256,17 @@ BEGIN
          * confirmed by running into it: an active capture group during
          * ALTER EXTENSION UPDATE otherwise ends up with this extension's
          * own new functions as members.
+         *
+         * The schema-creation statement itself (CREATE SCHEMA
+         * __object_reference/etc.) has schema_name = NULL, with the name
+         * only available via object_identity -- checked separately, and
+         * restricted to object_type = 'schema', so an unrelated object of
+         * some other type whose identity happens to match one of these
+         * three exact strings (e.g. a same-named extension) isn't caught
+         * by this fallback.
          */
-        AND coalesce(schema_name, object_identity, '') NOT IN ('__object_reference', 'object_reference', '_object_reference')
+        AND coalesce(schema_name, '') NOT IN ('__object_reference', 'object_reference', '_object_reference')
+        AND NOT (object_type = 'schema' AND object_identity IN ('__object_reference', 'object_reference', '_object_reference'))
     LOOP
       RAISE DEBUG 'registered %', row_to_json(r);
     END LOOP;
@@ -319,12 +334,30 @@ $body$
 );
 
 /*
- * Re-enable now that the guarded bodies above are live -- self-recognition
- * (checking for event_trigger__disable()'s temp table, created below) takes
- * over from here for the rest of this script.
+ * Restore each trigger's actual prior state (captured above) now that the
+ * guarded bodies above are live -- self-recognition (checking for
+ * event_trigger__disable()'s temp table, created below) takes over from
+ * here for the rest of this script.
  */
-ALTER EVENT TRIGGER zzz_object_reference_capture ENABLE;
-ALTER EVENT TRIGGER zzz_object_reference__fix_identity ENABLE;
+DO $$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN SELECT evtname, evtenabled FROM pg_temp.__object_reference__bootstrap_event_trigger_state LOOP
+    EXECUTE format(
+      'ALTER EVENT TRIGGER %I %s'
+      , r.evtname
+      , CASE r.evtenabled
+          WHEN 'O' THEN 'ENABLE'
+          WHEN 'R' THEN 'ENABLE REPLICA'
+          WHEN 'A' THEN 'ENABLE ALWAYS'
+          WHEN 'D' THEN 'DISABLE'
+        END
+    );
+  END LOOP;
+END
+$$;
+DROP TABLE pg_temp.__object_reference__bootstrap_event_trigger_state;
 
 /*
  * WARNING: avoid disabling event triggers at all where any other option

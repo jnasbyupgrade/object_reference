@@ -1489,8 +1489,17 @@ BEGIN
          * confirmed by running into it: an active capture group during
          * ALTER EXTENSION UPDATE otherwise ends up with this extension's
          * own new functions as members.
+         *
+         * The schema-creation statement itself (CREATE SCHEMA
+         * __object_reference/etc.) has schema_name = NULL, with the name
+         * only available via object_identity -- checked separately, and
+         * restricted to object_type = 'schema', so an unrelated object of
+         * some other type whose identity happens to match one of these
+         * three exact strings (e.g. a same-named extension) isn't caught
+         * by this fallback.
          */
-        AND coalesce(schema_name, object_identity, '') NOT IN ('__object_reference', 'object_reference', '_object_reference')
+        AND coalesce(schema_name, '') NOT IN ('__object_reference', 'object_reference', '_object_reference')
+        AND NOT (object_type = 'schema' AND object_identity IN ('__object_reference', 'object_reference', '_object_reference'))
     LOOP
       RAISE DEBUG 'registered %', row_to_json(r);
     END LOOP;

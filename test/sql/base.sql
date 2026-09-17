@@ -9,7 +9,7 @@ SELECT plan(
   +1 -- schema
   +3 -- initial
   +2 -- new functions
-  +6 -- errors (includes temp object + self-tracking rejection tests)
+  +8 -- errors (includes temp object + self-tracking rejection tests)
   +1 -- create extensions
   +2 -- schema-qualification (search_path)
 );
@@ -92,6 +92,27 @@ SELECT throws_ok(
   , '0A000' -- feature_not_supported
   , 'cannot track an object that is a member of the object_reference extension itself'
   , 'own declared schema is rejected (extension depends on it, not the other way around)'
+);
+SELECT throws_ok(
+  $$SELECT object_reference.object__getsert('schema', '_object_reference')$$
+  , '0A000' -- feature_not_supported
+  , 'cannot track an object that is a member of the object_reference extension itself'
+  , 'own private schema is rejected (an ordinary ''e'' pg_depend member, unlike the declared schema above)'
+);
+/*
+ * Exercised directly against _is_own_object() rather than through
+ * object__getsert('extension', ...): the latter's generic by-name OID
+ * lookup for object types with no reg-type cast (extension included)
+ * derives the wrong catalog column name and fails before ever reaching
+ * this check -- a pre-existing, unrelated bug (see
+ * object__getsert_w_group_id's v_name_field derivation, predating this PR).
+ */
+SELECT ok(
+  _object_reference._is_own_object(
+    'pg_catalog.pg_extension'::regclass
+    , (SELECT oid FROM pg_catalog.pg_extension WHERE extname = 'object_reference')
+  )
+  , '_is_own_object() recognizes its own pg_extension row'
 );
 
 -- Create extensions
