@@ -4,11 +4,14 @@
 
 /*
  * event_trigger__disable()/__enable() are ALTER EVENT TRIGGER under the
- * hood, which is a database-wide change visible to every session the
- * instant it runs (unlike the session-local session_replication_role trick
- * it replaces) -- so this test exercises the mechanism against its OWN
- * dummy event triggers, never the real zzz_* ones other test files in this
- * same parallel run depend on staying enabled.
+ * hood -- ordinary transactional DDL, invisible to other sessions until
+ * commit, same as any other catalog change (verified empirically: a
+ * concurrent session neither blocks on, nor otherwise sees, another
+ * session's still-uncommitted DISABLE). The real risk is two sessions both
+ * altering the SAME event trigger concurrently, so this test exercises the
+ * mechanism against its OWN dummy event triggers rather than the real zzz_*
+ * ones, to keep it independent of whatever else happens to run concurrently
+ * in this same parallel test batch.
  */
 CREATE FUNCTION event_trigger_disable_test__noop() RETURNS event_trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -19,19 +22,12 @@ CREATE EVENT TRIGGER event_trigger_disable_test__b ON ddl_command_start EXECUTE 
 
 SELECT plan(
   0
-  +1 -- default target is zzz__object_reference_drop
   +7 -- multi-trigger disable/enable preserves each one's own prior state
   +3 -- nested disable() without an intervening enable() is rejected
   +1 -- enable() without a matching disable() is rejected
   +1 -- disable() rejects an unknown event trigger name
+  +5 -- zzz_object_reference_capture self-recognizes and stands down while a disable() is in effect
   +2 -- schema-qualification (search_path)
-);
-
--- Default target (checked via source, never invoked against a real trigger)
-SELECT matches(
-  pg_catalog.pg_get_functiondef('_object_reference.event_trigger__disable(name[])'::regprocedure)
-  , 'zzz__object_reference_drop'
-  , 'default event trigger to disable is zzz__object_reference_drop'
 );
 
 -- Multi-trigger disable/enable, preserving each trigger's own prior state
@@ -98,6 +94,38 @@ SELECT throws_ok(
   , NULL
   , 'event trigger "no_such_event_trigger" does not exist'
   , 'disable() rejects an unknown event trigger name'
+);
+
+/*
+ * zzz_object_reference_capture / zzz_object_reference__fix_identity check
+ * for an event_trigger__disable() call currently in effect for THIS
+ * session (regardless of which trigger names it names) and stand down --
+ * verify that here for capture, since it's directly observable.
+ */
+SELECT lives_ok(
+  $$SELECT object_reference.capture__start(object_reference.object_group__create('event_trigger_disable_test_group'))$$
+  , 'start a capture group'
+);
+SELECT lives_ok(
+  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
+  , 'disable() (any trigger) also signals self-recognizing triggers to stand down'
+);
+CREATE TABLE event_trigger_disable_test_table();
+SELECT lives_ok(
+  $$SELECT _object_reference.event_trigger__enable()$$
+  , 'enable() ends that window'
+);
+SELECT is_empty(
+  $$
+    SELECT 1
+      FROM _object_reference.object_group__object
+      WHERE object_group_id = (object_reference.object_group__get('event_trigger_disable_test_group')).object_group_id
+  $$
+  , 'the table created while disable() was in effect was NOT captured'
+);
+SELECT lives_ok(
+  $$SELECT object_reference.capture__stop('event_trigger_disable_test_group')$$
+  , 'stop the capture group'
 );
 
 \i test/finish.sql
