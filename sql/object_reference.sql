@@ -169,35 +169,31 @@ SELECT __object_reference.create_function(
 $args$
   , 'boolean LANGUAGE sql STABLE'
   , $body$
-SELECT EXISTS(
-  SELECT 1
-    FROM pg_catalog.pg_depend d
-    WHERE d.classid = _is_own_object.classid
-      AND d.objid = _is_own_object.objid
-      AND d.deptype = 'e'
-      AND d.refclassid = 'pg_catalog.pg_extension'::regclass
-      AND d.refobjid = (SELECT oid FROM pg_catalog.pg_extension WHERE extname = 'object_reference')
-)
-/*
- * The extension's own declared schema (object_reference) is a special
- * case: CREATE EXTENSION records the EXTENSION as depending on it (a plain
- * DEPENDENCY_NORMAL row, extension -> schema), not the schema as an 'e'
- * member of the extension the way every other object it creates is -- so
- * it never matches the pg_depend check above.
- */
-OR (
-  _is_own_object.classid = 'pg_catalog.pg_namespace'::regclass
-  AND _is_own_object.objid = (SELECT extnamespace FROM pg_catalog.pg_extension WHERE extname = 'object_reference')
-)
-/*
- * The extension's own pg_extension row is also its own special case: it
- * isn't a member of itself (no 'e' row with itself as both member and
- * owner), so treat it as one explicitly.
- */
-OR (
-  _is_own_object.classid = 'pg_catalog.pg_extension'::regclass
-  AND _is_own_object.objid = (SELECT oid FROM pg_catalog.pg_extension WHERE extname = 'object_reference')
-)
+SELECT
+  EXISTS(
+    SELECT 1
+      FROM pg_catalog.pg_depend d
+      WHERE d.classid = _is_own_object.classid
+        AND d.objid = _is_own_object.objid
+        AND d.deptype = 'e'
+        AND d.refclassid = 'pg_catalog.pg_extension'::regclass
+        AND d.refobjid = e.oid
+  )
+  /*
+   * The extension's own declared schema (object_reference) is a special
+   * case: CREATE EXTENSION records the EXTENSION as depending on it (a
+   * plain DEPENDENCY_NORMAL row, extension -> schema), not the schema as
+   * an 'e' member of the extension the way every other object it creates
+   * is -- so it never matches the pg_depend check above.
+   */
+  OR (_is_own_object.classid = 'pg_catalog.pg_namespace'::regclass AND _is_own_object.objid = e.extnamespace)
+  /*
+   * The extension's own pg_extension row is also its own special case: it
+   * isn't a member of itself (no 'e' row with itself as both member and
+   * owner), so treat it as one explicitly.
+   */
+  OR (_is_own_object.classid = 'pg_catalog.pg_extension'::regclass AND _is_own_object.objid = e.oid)
+FROM (SELECT oid, extnamespace FROM pg_catalog.pg_extension WHERE extname = 'object_reference') e
 $body$
   , 'Is the object a member of the object_reference extension itself? (pg_depend deptype = e membership, not just co-installation.)'
 );
